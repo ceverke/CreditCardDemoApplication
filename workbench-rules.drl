@@ -1,0 +1,67 @@
+package de.adesso.blog.ceprules.creditcarddemo;
+
+
+import de.adesso.blog.cep.creditcarddemo.model.Transaction;
+import de.adesso.blog.cep.creditcarddemo.model.IncorrectPinEvent;
+import java.util.ArrayList;
+
+declare Transaction
+	@role (event)
+end
+
+declare IncorrectPinEvent
+	@role (event)
+end
+
+rule "InitRuleEngine"
+	when
+	    eval(true)
+	then
+		System.out.println("Rule-engine started!");
+end
+
+
+rule "Fraud detection rule 1"
+    when
+        $tx: Transaction() from entry-point "MonitoringStream";
+        Transaction( this != $tx, this after[0s,120s] $tx, !$tx.getExecutionLocation().equals(this.getExecutionLocation), $tx.getCreditCard() == this.getCreditCard())
+        from entry-point "MonitoringStream";
+    then
+        System.out.println("Fraud suspected by rule 1. Too transactions from two different countries in a short time");
+        $tx.getCreditCard().setActive(false);
+end
+
+rule "Fraud detection rule 2"
+    when
+        $tx: Transaction() from entry-point "MonitoringStream";
+        $collection : ArrayList(size==5)  from collect (
+				Transaction(isPersonalApproved()==false, getCreditCard() == $tx.getCreditCard())  over window:time( 1200s )  
+				from entry-point "MonitoringStream"
+		) 
+		eval ($collection.get($collection.size()-1).equals($tx));
+    then
+        System.out.println("Fraud suspected by rule 2. Too many not approved transactions");
+        $tx.getCreditCard().setActive(false);
+end
+
+rule "Fraud detection rule 3"
+    when
+        $ipe: IncorrectPinEvent() from entry-point "MonitoringStream";
+        $collection : ArrayList(size==3)  from collect (
+				IncorrectPinEvent(getCreditCard() == $ipe.getCreditCard()) over window:time( 1200s )  
+				from entry-point "MonitoringStream"
+		) 
+		eval ($collection.get($collection.size()-1).equals($ipe));
+    then
+        System.out.println("Fraud suspected by rule 3. Too many invalid PIN inputs");
+        $ipe.getCreditCard().setActive(false);
+end
+
+rule "Reactivate card"
+    when
+        $ipe: IncorrectPinEvent() from entry-point "MonitoringStream";
+        not( IncorrectPinEvent( this != $ipe, this after[0s,1200s] $ipe ) from entry-point "MonitoringStream" ) 
+    then
+        System.out.println("Activate card again");
+        $ipe.getCreditCard().setActive(true);
+end
